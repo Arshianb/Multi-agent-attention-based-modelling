@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import torch.nn.functional as F
-from mat.utils.util import get_shape_from_obs_space, get_shape_from_act_space
+from utils.util import get_shape_from_obs_space, get_shape_from_act_space
 
 
 def _flatten(T, N, x):
@@ -30,17 +30,17 @@ class SharedReplayBuffer(object):
     """
 
     def __init__(self, args, num_agents, obs_space, cent_obs_space, act_space, env_name):
-        self.episode_length = args.episode_length
-        self.n_rollout_threads = args.n_rollout_threads
-        self.hidden_size = args.hidden_size
-        self.recurrent_N = args.recurrent_N
-        self.gamma = args.gamma
-        self.gae_lambda = args.gae_lambda
-        self._use_gae = args.use_gae
-        self._use_popart = args.use_popart
-        self._use_valuenorm = args.use_valuenorm
-        self._use_proper_time_limits = args.use_proper_time_limits
-        self.algo = args.algorithm_name
+        self.episode_length = args["episode_length"]
+        self.n_rollout_threads = args["n_rollout_threads"]
+        self.hidden_size = args["hidden_size"]
+        self.recurrent_N = args["recurrent_N"]
+        self.gamma = args["gamma"]
+        self.gae_lambda = args["gae_lambda"]
+        self._use_gae = args["use_gae"]
+        self._use_popart = args["use_popart"]
+        self._use_valuenorm = args["use_valuenorm"]
+        self._use_proper_time_limits = args["use_proper_time_limits"]
+        self.algo = args["algorithm_name"]
         self.num_agents = num_agents
         self.env_name = env_name
 

@@ -2,7 +2,7 @@ import gym
 from gym import spaces
 from gym.envs.registration import EnvSpec
 import numpy as np
-from .multi_discrete import MultiDiscrete
+from multi_discrete import MultiDiscrete
 
 # update bounds to center around agent
 cam_range = 2
@@ -317,14 +317,14 @@ class MultiAgentEnv(gym.Env):
             if self.viewers[i] is None:
                 # import rendering only if we need it (and don't import for headless machines)
                 #from gym.envs.classic_control import rendering
-                from . import rendering
+                import rendering
                 self.viewers[i] = rendering.Viewer(700, 700)
 
         # create rendering geometry
         if self.render_geoms is None:
             # import rendering only if we need it (and don't import for headless machines)
             #from gym.envs.classic_control import rendering
-            from . import rendering
+            import rendering
             self.render_geoms = []
             self.render_geoms_xform = []
 
@@ -404,7 +404,7 @@ class MultiAgentEnv(gym.Env):
 
         results = []
         for i in range(len(self.viewers)):
-            from . import rendering
+            import rendering
 
             if self.shared_viewer:
                 pos = np.zeros(self.world.dim_p)

@@ -6,11 +6,11 @@ from scenario import BaseScenario
 class Scenario(BaseScenario):
     def make_world(self, args):
         world = World()
-        world.world_length = args.episode_length
+        world.world_length = args["episode_length"]
         # set any world properties first
         world.dim_c = 2
-        world.num_agents = args.num_agents
-        world.num_landmarks = args.num_landmarks  # 3
+        world.num_agents = args["num_agents"]
+        world.num_landmarks = args["num_landmarks"]  # 3
         world.collaborative = True
         # add agents
         world.agents = [Agent() for i in range(world.num_agents)]

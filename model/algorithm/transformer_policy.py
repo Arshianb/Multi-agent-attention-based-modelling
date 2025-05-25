@@ -19,11 +19,11 @@ class TransformerPolicy:
 
     def __init__(self, args, obs_space, cent_obs_space, act_space, num_agents, device=torch.device("cpu")):
         self.device = device
-        self.algorithm_name = args.algorithm_name
-        self.lr = args.lr
-        self.opti_eps = args.opti_eps
-        self.weight_decay = args.weight_decay
-        self._use_policy_active_masks = args.use_policy_active_masks
+        self.algorithm_name = args["algorithm_name"]
+        self.lr = args["lr"]
+        self.opti_eps = args["opti_eps"]
+        self.weight_decay = args["weight_decay"]
+        self._use_policy_active_masks = args["use_policy_active_masks"]
         if act_space.__class__.__name__ == 'Box':
             self.action_type = 'Continuous'
         else:
@@ -58,11 +58,11 @@ class TransformerPolicy:
             raise NotImplementedError
 
         self.transformer = MAT(self.share_obs_dim, self.obs_dim, self.act_dim, num_agents,
-                               n_block=args.n_block, n_embd=args.n_embd, n_head=args.n_head,
-                               encode_state=args.encode_state, device=device,
-                               action_type=self.action_type, dec_actor=args.dec_actor,
-                               share_actor=args.share_actor)
-        if args.env_name == "hands":
+                               n_block=args["n_block"], n_embd=args["n_embd"], n_head=args["n_head"],
+                               encode_state=args["encode_state"], device=device,
+                               action_type=self.action_type, dec_actor=args["dec_actor"],
+                               share_actor=args["share_actor"])
+        if args["env_name"] == "hands":
             self.transformer.zero_std()
 
         # count the volume of parameters of model

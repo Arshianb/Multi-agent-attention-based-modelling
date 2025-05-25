@@ -63,7 +63,6 @@ class SelfAttention(nn.Module):
 
 
 class EncodeBlock(nn.Module):
-    """ an unassuming Transformer block """
 
     def __init__(self, n_embd, n_head, n_agent):
         super(EncodeBlock, self).__init__()
