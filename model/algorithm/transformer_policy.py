@@ -18,6 +18,8 @@ class TransformerPolicy:
     """
 
     def __init__(self, args, obs_space, cent_obs_space, act_space, num_agents, device=torch.device("cpu")):
+        # obs_space shape is diffrent relative to enviroment etc foorball has 217
+        # act_space shape is diffrent relative to enviroment etc foorball has 19
         self.device = device
         self.algorithm_name = args["algorithm_name"]
         self.lr = args["lr"]
@@ -38,11 +40,7 @@ class TransformerPolicy:
             print("act high: ", act_space.high)
             self.act_dim = act_space.shape[0]
             self.act_num = self.act_dim
-
-        print("obs_dim: ", self.obs_dim)
-        print("share_obs_dim: ", self.share_obs_dim)
-        print("act_dim: ", self.act_dim)
-
+            
         self.num_agents = num_agents
         self.tpdv = dict(dtype=torch.float32, device=device)
 
@@ -64,22 +62,6 @@ class TransformerPolicy:
                                share_actor=args["share_actor"])
         if args["env_name"] == "hands":
             self.transformer.zero_std()
-
-        # count the volume of parameters of model
-        # Total_params = 0
-        # Trainable_params = 0
-        # NonTrainable_params = 0
-        # for param in self.transformer.parameters():
-        #     mulValue = np.prod(param.size())
-        #     Total_params += mulValue
-        #     if param.requires_grad:
-        #         Trainable_params += mulValue
-        #     else:
-        #         NonTrainable_params += mulValue
-        # print(f'Total params: {Total_params}')
-        # print(f'Trainable params: {Trainable_params}')
-        # print(f'Non-trainable params: {NonTrainable_params}')
-
         self.optimizer = torch.optim.Adam(self.transformer.parameters(),
                                           lr=self.lr, eps=self.opti_eps,
                                           weight_decay=self.weight_decay)
@@ -92,8 +74,7 @@ class TransformerPolicy:
         """
         update_linear_schedule(self.optimizer, episode, episodes, self.lr)
 
-    def get_actions(self, cent_obs, obs, rnn_states_actor, rnn_states_critic, masks, available_actions=None,
-                    deterministic=False):
+    def get_actions(self, cent_obs, obs, rnn_states_actor, rnn_states_critic, masks, available_actions=None, deterministic=False):
         """
         Compute actions and value function predictions for the given inputs.
         :param cent_obs (np.ndarray): centralized input to the critic.
@@ -111,21 +92,17 @@ class TransformerPolicy:
         :return rnn_states_actor: (torch.Tensor) updated actor network RNN states.
         :return rnn_states_critic: (torch.Tensor) updated critic network RNN states.
         """
-
         cent_obs = cent_obs.reshape(-1, self.num_agents, self.share_obs_dim)
         obs = obs.reshape(-1, self.num_agents, self.obs_dim)
         if available_actions is not None:
             available_actions = available_actions.reshape(-1, self.num_agents, self.act_dim)
-
         actions, action_log_probs, values = self.transformer.get_actions(cent_obs,
                                                                          obs,
                                                                          available_actions,
                                                                          deterministic)
-
         actions = actions.view(-1, self.act_num)
         action_log_probs = action_log_probs.view(-1, self.act_num)
         values = values.view(-1, 1)
-
         # unused, just for compatibility
         rnn_states_actor = check(rnn_states_actor).to(**self.tpdv)
         rnn_states_critic = check(rnn_states_critic).to(**self.tpdv)
@@ -140,20 +117,15 @@ class TransformerPolicy:
 
         :return values: (torch.Tensor) value function predictions.
         """
-
         cent_obs = cent_obs.reshape(-1, self.num_agents, self.share_obs_dim)
         obs = obs.reshape(-1, self.num_agents, self.obs_dim)
         if available_actions is not None:
             available_actions = available_actions.reshape(-1, self.num_agents, self.act_dim)
-
         values = self.transformer.get_values(cent_obs, obs, available_actions)
-
         values = values.view(-1, 1)
-
         return values
 
-    def evaluate_actions(self, cent_obs, obs, rnn_states_actor, rnn_states_critic, actions, masks,
-                         available_actions=None, active_masks=None):
+    def evaluate_actions(self, cent_obs, obs, rnn_states_actor, rnn_states_critic, actions, masks, available_actions=None, active_masks=None):
         """
         Get action logprobs / entropy and value function predictions for actor update.
         :param cent_obs (np.ndarray): centralized input to the critic.
@@ -186,7 +158,6 @@ class TransformerPolicy:
             entropy = (entropy*active_masks).sum()/active_masks.sum()
         else:
             entropy = entropy.mean()
-
         return values, action_log_probs, entropy
 
     def act(self, cent_obs, obs, rnn_states_actor, masks, available_actions=None, deterministic=True):

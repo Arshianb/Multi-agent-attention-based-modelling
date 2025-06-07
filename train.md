@@ -250,7 +250,7 @@ This method cleanly separates evaluation-mode policy inference from environment 
 
 ## main run function
 ```python
-    def run(self):
+def run(self):
     self.warmup()   
     self.gif_dir="./gifs"
     start = time.time()
@@ -300,3 +300,310 @@ This method cleanly separates evaluation-mode policy inference from environment 
                     agent_k = 'agent%i/individual_rewards' % agent_id
                     env_infos[agent_k] = idv_rews
 ```
+
+## Add data to buffer
+```python
+def insert(self, data):
+    obs, rewards, dones, infos, values, actions, action_log_probs, rnn_states, rnn_states_critic = data
+
+    rnn_states[dones == True] = np.zeros(((dones == True).sum(), self.recurrent_N, self.hidden_size), dtype=np.float32)
+    rnn_states_critic[dones == True] = np.zeros(((dones == True).sum(), *self.buffer.rnn_states_critic.shape[3:]), dtype=np.float32)
+    masks = np.ones((self.n_rollout_threads, self.num_agents, 1), dtype=np.float32)
+    masks[dones == True] = np.zeros(((dones == True).sum(), 1), dtype=np.float32)
+
+    if self.use_centralized_V:
+        share_obs = obs.reshape(self.n_rollout_threads, -1)
+        share_obs = np.expand_dims(share_obs, 1).repeat(self.num_agents, axis=1)
+    else:
+        share_obs = obs
+
+    self.buffer.insert(share_obs, obs, rnn_states, rnn_states_critic, actions, action_log_probs, values, rewards, masks)
+```
+
+### insert function of buffer
+```python
+def insert(self, share_obs, obs, rnn_states_actor, rnn_states_critic, actions, action_log_probs,
+            value_preds, rewards, masks, bad_masks=None, active_masks=None, available_actions=None):
+    """
+    Insert data into the buffer.
+    :param share_obs: (argparse.Namespace) arguments containing relevant model, policy, and env information.
+    :param obs: (np.ndarray) local agent observations.
+    :param rnn_states_actor: (np.ndarray) RNN states for actor network.
+    :param rnn_states_critic: (np.ndarray) RNN states for critic network.
+    :param actions:(np.ndarray) actions taken by agents.
+    :param action_log_probs:(np.ndarray) log probs of actions taken by agents
+    :param value_preds: (np.ndarray) value function prediction at each step.
+    :param rewards: (np.ndarray) reward collected at each step.
+    :param masks: (np.ndarray) denotes whether the environment has terminated or not.
+    :param bad_masks: (np.ndarray) action space for agents.
+    :param active_masks: (np.ndarray) denotes whether an agent is active or dead in the env.
+    :param available_actions: (np.ndarray) actions available to each agent. If None, all actions are available.
+    """
+    self.share_obs[self.step + 1] = share_obs.copy()
+    self.obs[self.step + 1] = obs.copy()
+    self.rnn_states[self.step + 1] = rnn_states_actor.copy()
+    self.rnn_states_critic[self.step + 1] = rnn_states_critic.copy()
+    self.actions[self.step] = actions.copy()
+    self.action_log_probs[self.step] = action_log_probs.copy()
+    self.value_preds[self.step] = value_preds.copy()
+    self.rewards[self.step] = rewards.copy()
+    self.masks[self.step + 1] = masks.copy()
+    if bad_masks is not None:
+        self.bad_masks[self.step + 1] = bad_masks.copy()
+    if active_masks is not None:
+        self.active_masks[self.step + 1] = active_masks.copy()
+    if available_actions is not None:
+        self.available_actions[self.step + 1] = available_actions.copy()
+
+    self.step = (self.step + 1) % self.episode_length
+```
+## how is `train_infos = self.train()` will be worked?
+```python
+def train(self, buffer):
+    """
+    Perform a training update using minibatch GD.
+    :param buffer: (SharedReplayBuffer) buffer containing training data.
+    :param update_actor: (bool) whether to update actor network.
+
+    :return train_info: (dict) contains information regarding training update (e.g. loss, grad norms, etc).
+    """
+    advantages_copy = buffer.advantages.copy()
+    advantages_copy[buffer.active_masks[:-1] == 0.0] = np.nan
+    mean_advantages = np.nanmean(advantages_copy)
+    std_advantages = np.nanstd(advantages_copy)
+    advantages = (buffer.advantages - mean_advantages) / (std_advantages + 1e-5)
+    
+
+    train_info = {}
+
+    train_info['value_loss'] = 0
+    train_info['policy_loss'] = 0
+    train_info['dist_entropy'] = 0
+    train_info['actor_grad_norm'] = 0
+    train_info['critic_grad_norm'] = 0
+    train_info['ratio'] = 0
+
+    for _ in range(self.ppo_epoch):
+        data_generator = buffer.feed_forward_generator_transformer(advantages, self.num_mini_batch)
+
+        for sample in data_generator:
+
+            value_loss, critic_grad_norm, policy_loss, dist_entropy, actor_grad_norm, imp_weights \
+                = self.ppo_update(sample)
+
+            train_info['value_loss'] += value_loss.item()
+            train_info['policy_loss'] += policy_loss.item()
+            train_info['dist_entropy'] += dist_entropy.item()
+            train_info['actor_grad_norm'] += actor_grad_norm
+            train_info['critic_grad_norm'] += critic_grad_norm
+            train_info['ratio'] += imp_weights.mean()
+
+    num_updates = self.ppo_epoch * self.num_mini_batch
+
+    for k in train_info.keys():
+        train_info[k] /= num_updates
+
+    return train_info
+```
+
+### what is `feed_forward_generator_transformer`
+```python
+def feed_forward_generator_transformer(self, advantages, num_mini_batch=None, mini_batch_size=None):
+    """
+    Yield training data for MLP policies.
+    :param advantages: (np.ndarray) advantage estimates.
+    :param num_mini_batch: (int) number of minibatches to split the batch into.
+    :param mini_batch_size: (int) number of samples in each minibatch.
+    """
+    episode_length, n_rollout_threads, num_agents = self.rewards.shape[0:3]
+    batch_size = n_rollout_threads * episode_length
+
+    if mini_batch_size is None:
+        assert batch_size >= num_mini_batch, (
+            "PPO requires the number of processes ({}) "
+            "* number of steps ({}) = {} "
+            "to be greater than or equal to the number of PPO mini batches ({})."
+            "".format(n_rollout_threads, episode_length,
+                        n_rollout_threads * episode_length,
+                        num_mini_batch))
+        mini_batch_size = batch_size // num_mini_batch
+
+    rand = torch.randperm(batch_size).numpy()
+    sampler = [rand[i * mini_batch_size:(i + 1) * mini_batch_size] for i in range(num_mini_batch)]
+    rows, cols = _shuffle_agent_grid(batch_size, num_agents)
+
+    # keep (num_agent, dim)
+    share_obs = self.share_obs[:-1].reshape(-1, *self.share_obs.shape[2:])
+    share_obs = share_obs[rows, cols]
+    obs = self.obs[:-1].reshape(-1, *self.obs.shape[2:])
+    obs = obs[rows, cols]
+    rnn_states = self.rnn_states[:-1].reshape(-1, *self.rnn_states.shape[2:])
+    rnn_states = rnn_states[rows, cols]
+    rnn_states_critic = self.rnn_states_critic[:-1].reshape(-1, *self.rnn_states_critic.shape[2:])
+    rnn_states_critic = rnn_states_critic[rows, cols]
+    actions = self.actions.reshape(-1, *self.actions.shape[2:])
+    actions = actions[rows, cols]
+    if self.available_actions is not None:
+        available_actions = self.available_actions[:-1].reshape(-1, *self.available_actions.shape[2:])
+        available_actions = available_actions[rows, cols]
+    value_preds = self.value_preds[:-1].reshape(-1, *self.value_preds.shape[2:])
+    value_preds = value_preds[rows, cols]
+    returns = self.returns[:-1].reshape(-1, *self.returns.shape[2:])
+    returns = returns[rows, cols]
+    masks = self.masks[:-1].reshape(-1, *self.masks.shape[2:])
+    masks = masks[rows, cols]
+    active_masks = self.active_masks[:-1].reshape(-1, *self.active_masks.shape[2:])
+    active_masks = active_masks[rows, cols]
+    action_log_probs = self.action_log_probs.reshape(-1, *self.action_log_probs.shape[2:])
+    action_log_probs = action_log_probs[rows, cols]
+    advantages = advantages.reshape(-1, *advantages.shape[2:])
+    advantages = advantages[rows, cols]
+
+    for indices in sampler:
+        # [L,T,N,Dim]-->[L*T,N,Dim]-->[index,N,Dim]-->[index*N, Dim]
+        share_obs_batch = share_obs[indices].reshape(-1, *share_obs.shape[2:])
+        obs_batch = obs[indices].reshape(-1, *obs.shape[2:])
+        rnn_states_batch = rnn_states[indices].reshape(-1, *rnn_states.shape[2:])
+        rnn_states_critic_batch = rnn_states_critic[indices].reshape(-1, *rnn_states_critic.shape[2:])
+        actions_batch = actions[indices].reshape(-1, *actions.shape[2:])
+        if self.available_actions is not None:
+            available_actions_batch = available_actions[indices].reshape(-1, *available_actions.shape[2:])
+        else:
+            available_actions_batch = None
+        value_preds_batch = value_preds[indices].reshape(-1, *value_preds.shape[2:])
+        return_batch = returns[indices].reshape(-1, *returns.shape[2:])
+        masks_batch = masks[indices].reshape(-1, *masks.shape[2:])
+        active_masks_batch = active_masks[indices].reshape(-1, *active_masks.shape[2:])
+        old_action_log_probs_batch = action_log_probs[indices].reshape(-1, *action_log_probs.shape[2:])
+        if advantages is None:
+            adv_targ = None
+        else:
+            adv_targ = advantages[indices].reshape(-1, *advantages.shape[2:])
+
+        yield share_obs_batch, obs_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, \
+                value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, \
+                adv_targ, available_actions_batch
+
+```
+input shape is `T, N-threads, N-agents, ...` and will be reshape to `T * N-threads, N-agents, ...`.
+### how `advantages` will be caculated?
+from `self.compute()` of main run train function
+```python
+def compute(self):
+    """Calculate returns for the collected data."""
+    self.trainer.prep_rollout()
+    if self.buffer.available_actions is None:
+        next_values = self.trainer.policy.get_values(np.concatenate(self.buffer.share_obs[-1]),
+                                                        np.concatenate(self.buffer.obs[-1]),
+                                                        np.concatenate(self.buffer.rnn_states_critic[-1]),
+                                                        np.concatenate(self.buffer.masks[-1]))
+    else:
+        next_values = self.trainer.policy.get_values(np.concatenate(self.buffer.share_obs[-1]),
+                                                        np.concatenate(self.buffer.obs[-1]),
+                                                        np.concatenate(self.buffer.rnn_states_critic[-1]),
+                                                        np.concatenate(self.buffer.masks[-1]),
+                                                        np.concatenate(self.buffer.available_actions[-1]))
+    next_values = np.array(np.split(_t2n(next_values), self.n_rollout_threads))
+    self.buffer.compute_returns(next_values, self.trainer.value_normalizer)
+```
+
+#### what is `self.buffer.compute_returns`
+```python
+def compute_returns(self, next_value, value_normalizer=None):
+    """
+    Compute returns either as discounted sum of rewards, or using GAE.
+    :param next_value: (np.ndarray) value predictions for the step after the last episode step.
+    :param value_normalizer: (PopArt) If not None, PopArt value normalizer instance.
+    """
+    self.value_preds[-1] = next_value
+    gae = 0
+    for step in reversed(range(self.rewards.shape[0])):
+        if self._use_popart or self._use_valuenorm:
+            delta = self.rewards[step] + self.gamma * value_normalizer.denormalize(
+                self.value_preds[step + 1]) * self.masks[step + 1] \
+                    - value_normalizer.denormalize(self.value_preds[step])
+            gae = delta + self.gamma * self.gae_lambda * self.masks[step + 1] * gae
+
+            # here is a patch for mpe, whose last step is timeout instead of terminate
+            if self.env_name == "MPE" and step == self.rewards.shape[0] - 1:
+                gae = 0
+
+            self.advantages[step] = gae
+            self.returns[step] = gae + value_normalizer.denormalize(self.value_preds[step])
+        else:
+            delta = self.rewards[step] + self.gamma * self.value_preds[step + 1] * \
+                    self.masks[step + 1] - self.value_preds[step]
+            gae = delta + self.gamma * self.gae_lambda * self.masks[step + 1] * gae
+
+            # here is a patch for mpe, whose last step is timeout instead of terminate
+            if self.env_name == "MPE" and step == self.rewards.shape[0] - 1:
+                gae = 0
+
+            self.advantages[step] = gae
+            self.returns[step] = gae + self.value_preds[step]
+```
+### back to self.train() what is the `self.ppo_update(sample)`
+```python
+def ppo_update(self, sample):
+    """
+    Update actor and critic networks.
+    :param sample: (Tuple) contains data batch with which to update networks.
+    :update_actor: (bool) whether to update actor network.
+
+    :return value_loss: (torch.Tensor) value function loss.
+    :return critic_grad_norm: (torch.Tensor) gradient norm from critic up9date.
+    ;return policy_loss: (torch.Tensor) actor(policy) loss value.
+    :return dist_entropy: (torch.Tensor) action entropies.
+    :return actor_grad_norm: (torch.Tensor) gradient norm from actor update.
+    :return imp_weights: (torch.Tensor) importance sampling weights.
+    """
+    share_obs_batch, obs_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, \
+    value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, \
+    adv_targ, available_actions_batch = sample
+
+    old_action_log_probs_batch = check(old_action_log_probs_batch).to(**self.tpdv)
+    adv_targ = check(adv_targ).to(**self.tpdv)
+    value_preds_batch = check(value_preds_batch).to(**self.tpdv)
+    return_batch = check(return_batch).to(**self.tpdv)
+    active_masks_batch = check(active_masks_batch).to(**self.tpdv)
+
+    # Reshape to do in a single forward pass for all steps
+    values, action_log_probs, dist_entropy = self.policy.evaluate_actions(share_obs_batch,
+                                                                            obs_batch, 
+                                                                            rnn_states_batch, 
+                                                                            rnn_states_critic_batch, 
+                                                                            actions_batch, 
+                                                                            masks_batch, 
+                                                                            available_actions_batch,
+                                                                            active_masks_batch)
+    # actor update
+    imp_weights = torch.exp(action_log_probs - old_action_log_probs_batch)
+
+    surr1 = imp_weights * adv_targ
+    surr2 = torch.clamp(imp_weights, 1.0 - self.clip_param, 1.0 + self.clip_param) * adv_targ
+
+    if self._use_policy_active_masks:
+        policy_loss = (-torch.sum(torch.min(surr1, surr2),
+                                    dim=-1,
+                                    keepdim=True) * active_masks_batch).sum() / active_masks_batch.sum()
+    else:
+        policy_loss = -torch.sum(torch.min(surr1, surr2), dim=-1, keepdim=True).mean()
+
+    # critic update
+    value_loss = self.cal_value_loss(values, value_preds_batch, return_batch, active_masks_batch)
+
+    loss = policy_loss - dist_entropy * self.entropy_coef + value_loss * self.value_loss_coef
+
+    self.policy.optimizer.zero_grad()
+    loss.backward()
+
+    if self._use_max_grad_norm:
+        grad_norm = nn.utils.clip_grad_norm_(self.policy.transformer.parameters(), self.max_grad_norm)
+    else:
+        grad_norm = get_gard_norm(self.policy.transformer.parameters())
+
+    self.policy.optimizer.step()
+
+    return value_loss, grad_norm, policy_loss, dist_entropy, grad_norm, imp_weights
+```
+`adv_targ` was computed by `compute_returns`

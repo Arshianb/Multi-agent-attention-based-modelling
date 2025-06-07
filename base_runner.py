@@ -42,13 +42,11 @@ class Runner(object):
         self.use_wandb = self.all_args["use_wandb"]
         self.use_render = self.all_args["use_render"]
         self.recurrent_N = self.all_args["recurrent_N"]
-
         # interval
         self.save_interval = self.all_args["save_interval"]
         self.use_eval = self.all_args["use_eval"]
         self.eval_interval = self.all_args["eval_interval"]
         self.log_interval = self.all_args["log_interval"]
-
         # dir
         self.model_dir = self.all_args["model_dir"]
 
@@ -64,13 +62,12 @@ class Runner(object):
             self.save_dir = str(self.run_dir / 'models')
             if not os.path.exists(self.save_dir):
                 os.makedirs(self.save_dir)
-
+        # self.envs.observation_space = num_agents*[Box(observation_space,)]
         share_observation_space = self.envs.share_observation_space[0] if self.use_centralized_V else self.envs.observation_space[0]
-
+        # share_observation_space = Box(observation_space,)
         print("obs_space: ", self.envs.observation_space)
         print("share_obs_space: ", self.envs.share_observation_space)
         print("act_space: ", self.envs.action_space)
-
         # policy network
         self.policy = Policy(self.all_args,
                              self.envs.observation_space[0],
@@ -78,13 +75,10 @@ class Runner(object):
                              self.envs.action_space[0],
                              self.num_agents,
                              device=self.device)
-
         if self.model_dir is not None:
             self.restore(self.model_dir)
-
         # algorithm
         self.trainer = TrainAlgo(self.all_args, self.policy, self.num_agents, device=self.device)
-        
         # buffer
         self.buffer = SharedReplayBuffer(self.all_args,
                                         self.num_agents,
@@ -116,6 +110,12 @@ class Runner(object):
     def compute(self):
         """Calculate returns for the collected data."""
         self.trainer.prep_rollout()
+        # self.buffer.share_obs[-1].shape = (self.n_rollout_threads, self.num_agents, len of obs space (etc 217 for football))
+        # self.buffer.obs[-1].shape = (self.n_rollout_threads, self.num_agents, len of obs space (etc 217 for football))
+        # self.buffer.rnn_states_critic[-1].shape = (self.n_rollout_threads, self.num_agents, 1, 64)
+        # self.buffer.masks[-1].shape = (self.n_rollout_threads, self.num_agents, 1), min or max is equal to 1
+        # self.buffer.available_actions[-1].shape = (self.n_rollout_threads, self.num_agents, action_space(etc 19 for football))
+        # after np.concatenate their will be (self.n_rollout_threads*self.num_agents, ...)
         if self.buffer.available_actions is None:
             next_values = self.trainer.policy.get_values(np.concatenate(self.buffer.share_obs[-1]),
                                                          np.concatenate(self.buffer.obs[-1]),
@@ -127,13 +127,17 @@ class Runner(object):
                                                          np.concatenate(self.buffer.rnn_states_critic[-1]),
                                                          np.concatenate(self.buffer.masks[-1]),
                                                          np.concatenate(self.buffer.available_actions[-1]))
+        # next_values.shape = [self.n_rollout_threads*self.num_agents, 1]
         next_values = np.array(np.split(_t2n(next_values), self.n_rollout_threads))
+        # next_values.shape = [self.n_rollout_threads, self.num_agents, 1]
         self.buffer.compute_returns(next_values, self.trainer.value_normalizer)
     
     def train(self):
         """Train policies with data in buffer. """
+        # switch model parammeters trainble
         self.trainer.prep_training()
         train_infos = self.trainer.train(self.buffer)      
+        # Copy last timestep data to first index. to fill next train batch size.
         self.buffer.after_update()
         return train_infos
 

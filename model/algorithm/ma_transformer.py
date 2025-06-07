@@ -112,7 +112,6 @@ class Encoder(nn.Module):
 
     def __init__(self, state_dim, obs_dim, n_block, n_embd, n_head, n_agent, encode_state):
         super(Encoder, self).__init__()
-
         self.state_dim = state_dim
         self.obs_dim = obs_dim
         self.n_embd = n_embd
@@ -148,8 +147,7 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
 
-    def __init__(self, obs_dim, action_dim, n_block, n_embd, n_head, n_agent,
-                 action_type='Discrete', dec_actor=False, share_actor=False):
+    def __init__(self, obs_dim, action_dim, n_block, n_embd, n_head, n_agent, action_type='Discrete', dec_actor=False, share_actor=False):
         super(Decoder, self).__init__()
 
         self.action_dim = action_dim
@@ -223,9 +221,7 @@ class Decoder(nn.Module):
 
 class MultiAgentTransformer(nn.Module):
 
-    def __init__(self, state_dim, obs_dim, action_dim, n_agent,
-                 n_block, n_embd, n_head, encode_state=False, device=torch.device("cpu"),
-                 action_type='Discrete', dec_actor=False, share_actor=False):
+    def __init__(self, state_dim, obs_dim, action_dim, n_agent, n_block, n_embd, n_head, encode_state=False, device=torch.device("cpu"), action_type='Discrete', dec_actor=False, share_actor=False):
         super(MultiAgentTransformer, self).__init__()
 
         self.n_agent = n_agent
@@ -251,18 +247,14 @@ class MultiAgentTransformer(nn.Module):
         # obs: (batch, n_agent, obs_dim)
         # action: (batch, n_agent, 1)
         # available_actions: (batch, n_agent, act_dim)
-
         # state unused
         ori_shape = np.shape(state)
         state = np.zeros((*ori_shape[:-1], 37), dtype=np.float32)
-
         state = check(state).to(**self.tpdv)
         obs = check(obs).to(**self.tpdv)
         action = check(action).to(**self.tpdv)
-
         if available_actions is not None:
             available_actions = check(available_actions).to(**self.tpdv)
-
         batch_size = np.shape(state)[0]
         v_loc, obs_rep = self.encoder(state, obs)
         if self.action_type == 'Discrete':

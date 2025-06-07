@@ -13,17 +13,12 @@ class MATTrainer:
     :param policy: (R_MAPPO_Policy) policy to update.
     :param device: (torch.device) specifies the device to run on (cpu/gpu).
     """
-    def __init__(self,
-                 args,
-                 policy,
-                 num_agents,
-                 device=torch.device("cpu")):
+    def __init__(self, args, policy, num_agents, device=torch.device("cpu")):
 
         self.device = device
         self.tpdv = dict(dtype=torch.float32, device=device)
         self.policy = policy
         self.num_agents = num_agents
-
         self.clip_param = args["clip_param"]
         self.ppo_epoch = args["ppo_epoch"]
         self.num_mini_batch = args["num_mini_batch"]
@@ -32,7 +27,6 @@ class MATTrainer:
         self.entropy_coef = args["entropy_coef"]
         self.max_grad_norm = args["max_grad_norm"]       
         self.huber_delta = args["huber_delta"]
-
         self._use_recurrent_policy = args["use_recurrent_policy"]
         self._use_naive_recurrent = args["use_naive_recurrent_policy"]
         self._use_max_grad_norm = args["use_max_grad_norm"]
@@ -42,7 +36,6 @@ class MATTrainer:
         self._use_value_active_masks = args["use_value_active_masks"]
         self._use_policy_active_masks = args["use_policy_active_masks"]
         self.dec_actor = args["dec_actor"]
-        
         if self._use_valuenorm:
             self.value_normalizer = ValueNorm(1, device=self.device)
         else:
@@ -58,10 +51,8 @@ class MATTrainer:
 
         :return value_loss: (torch.Tensor) value function loss.
         """
-
         value_pred_clipped = value_preds_batch + (values - value_preds_batch).clamp(-self.clip_param,
                                                                                     self.clip_param)
-
         if self._use_valuenorm:
             self.value_normalizer.update(return_batch)
             error_clipped = self.value_normalizer.normalize(return_batch) - value_pred_clipped
@@ -81,7 +72,6 @@ class MATTrainer:
             value_loss = torch.max(value_loss_original, value_loss_clipped)
         else:
             value_loss = value_loss_original
-
         # if self._use_value_active_masks and not self.dec_actor:
         if self._use_value_active_masks:
             value_loss = (value_loss * active_masks_batch).sum() / active_masks_batch.sum()
@@ -106,13 +96,21 @@ class MATTrainer:
         share_obs_batch, obs_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, \
         value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, \
         adv_targ, available_actions_batch = sample
-
+        # available_actions_batch.shape = episoide_len*self.n_rollout_threads*num_agents, act_space
+        # adv_targ.shape = episoide_len*self.n_rollout_threads*num_agents, 1
+        # old_action_log_probs_batch.shape = episoide_len*self.n_rollout_threads*num_agents, 1
+        # active_masks_batch.shape = episoide_len*self.n_rollout_threads*num_agents, 1
+        # masks_batch.shape = episoide_len*self.n_rollout_threads*num_agents, 1
+        # return_batch.shape = episoide_len*self.n_rollout_threads*num_agents, 1
+        # value_preds_batch.shape = episoide_len*self.n_rollout_threads*num_agents, 1
+        # actions_batch.shape = episoide_len*self.n_rollout_threads*num_agents, 1
+        # obs_batch.shape = episoide_len*self.n_rollout_threads*num_agents, obs_space
         old_action_log_probs_batch = check(old_action_log_probs_batch).to(**self.tpdv)
         adv_targ = check(adv_targ).to(**self.tpdv)
         value_preds_batch = check(value_preds_batch).to(**self.tpdv)
         return_batch = check(return_batch).to(**self.tpdv)
         active_masks_batch = check(active_masks_batch).to(**self.tpdv)
-
+        # values.shape = episoide_len*self.n_rollout_threads*num_agents, 1
         # Reshape to do in a single forward pass for all steps
         values, action_log_probs, dist_entropy = self.policy.evaluate_actions(share_obs_batch,
                                                                               obs_batch, 
@@ -134,22 +132,16 @@ class MATTrainer:
                                       keepdim=True) * active_masks_batch).sum() / active_masks_batch.sum()
         else:
             policy_loss = -torch.sum(torch.min(surr1, surr2), dim=-1, keepdim=True).mean()
-
         # critic update
         value_loss = self.cal_value_loss(values, value_preds_batch, return_batch, active_masks_batch)
-
         loss = policy_loss - dist_entropy * self.entropy_coef + value_loss * self.value_loss_coef
-
         self.policy.optimizer.zero_grad()
         loss.backward()
-
         if self._use_max_grad_norm:
             grad_norm = nn.utils.clip_grad_norm_(self.policy.transformer.parameters(), self.max_grad_norm)
         else:
             grad_norm = get_gard_norm(self.policy.transformer.parameters())
-
         self.policy.optimizer.step()
-
         return value_loss, grad_norm, policy_loss, dist_entropy, grad_norm, imp_weights
 
     def train(self, buffer):

@@ -102,7 +102,6 @@ class MPERunner(Runner):
                             np.concatenate(self.buffer.rnn_states[step]),
                             np.concatenate(self.buffer.rnn_states_critic[step]),
                             np.concatenate(self.buffer.masks[step]))
-        # [self.envs, agents, dim]
         values = np.array(np.split(_t2n(value), self.n_rollout_threads))
         actions = np.array(np.split(_t2n(action), self.n_rollout_threads))
         action_log_probs = np.array(np.split(_t2n(action_log_prob), self.n_rollout_threads))
@@ -120,12 +119,10 @@ class MPERunner(Runner):
             actions_env = np.squeeze(np.eye(self.envs.action_space[0].n)[actions], 2)
         else:
             raise NotImplementedError
-
         return values, actions, action_log_probs, rnn_states, rnn_states_critic, actions_env
 
     def insert(self, data):
         obs, rewards, dones, infos, values, actions, action_log_probs, rnn_states, rnn_states_critic = data
-
         rnn_states[dones == True] = np.zeros(((dones == True).sum(), self.recurrent_N, self.hidden_size), dtype=np.float32)
         rnn_states_critic[dones == True] = np.zeros(((dones == True).sum(), *self.buffer.rnn_states_critic.shape[3:]), dtype=np.float32)
         masks = np.ones((self.n_rollout_threads, self.num_agents, 1), dtype=np.float32)
@@ -136,7 +133,6 @@ class MPERunner(Runner):
             share_obs = np.expand_dims(share_obs, 1).repeat(self.num_agents, axis=1)
         else:
             share_obs = obs
-
         self.buffer.insert(share_obs, obs, rnn_states, rnn_states_critic, actions, action_log_probs, values, rewards, masks)
 
     @torch.no_grad()
